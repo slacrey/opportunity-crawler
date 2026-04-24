@@ -4,10 +4,11 @@
   "scripts": {
     "frontend:dev": "npm --prefix frontend run dev",
     "frontend:build": "npm --prefix frontend run build",
-    "frontend:test": "npm --prefix frontend run test"
+    "frontend:test": "npm --prefix frontend run test",
+    "package:app": "bash scripts/package_app.sh",
+    "package:desktop": "bash scripts/package_app.sh --desktop"
   },
   "workspaces": [
     "frontend"
   ]
 }
-

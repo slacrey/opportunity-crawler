@@ -15,6 +15,7 @@ def test_dev_scripts_reference_opportunity_crawler_package() -> None:
         ROOT / "scripts" / "start_dev.sh",
         ROOT / "scripts" / "run_control_plane_dev.py",
         ROOT / "scripts" / "run_agent_dev.py",
+        ROOT / "scripts" / "package_app.sh",
     ]
 
     for script_path in expected_scripts:
@@ -100,6 +101,29 @@ def test_dev_runtime_artifacts_are_gitignored() -> None:
     assert "/var/" in content
     assert "__pycache__/" in content
     assert "*.pyc" in content
+
+
+def test_package_script_builds_frontend_pyinstaller_sidecars_and_optional_desktop_bundle() -> None:
+    content = (ROOT / "scripts" / "package_app.sh").read_text(encoding="utf-8")
+
+    assert 'npm --prefix "$ROOT_DIR/frontend" run build' in content
+    assert "python3" in content
+    assert "-m PyInstaller" in content
+    assert "PYINSTALLER_CONFIG_DIR" in content
+    assert "packaging/pyinstaller/control_plane.spec" in content
+    assert "packaging/pyinstaller/agent.spec" in content
+    assert "packaging/pyinstaller/all_in_one.spec" in content
+    assert "detect_tauri_target_triple" in content
+    assert "src-tauri/binaries" in content
+    assert "--desktop" in content
+    assert "cargo tauri build" in content
+
+
+def test_root_package_json_exposes_packaging_commands() -> None:
+    content = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert '"package:app": "bash scripts/package_app.sh"' in content
+    assert '"package:desktop": "bash scripts/package_app.sh --desktop"' in content
 
 
 def _load_script_module(path: Path):

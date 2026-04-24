@@ -1,0 +1,17 @@
+[[sources]]
+name = "中国政府采购网"
+adapter_mode = "public_search_list_detail"
+login_mode = "not_required"
+priority = "P0"
+
+[[sources]]
+name = "全国公共资源交易平台"
+adapter_mode = "public_search_list_detail"
+login_mode = "not_required"
+priority = "P0"
+
+[[sources]]
+name = "中国招标投标公共服务平台"
+adapter_mode = "public_search_list_detail"
+login_mode = "not_required"
+priority = "P0"

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "智能商机挖掘助手",
+  "version": "0.1.0",
+  "identifier": "com.local.opportunity-crawler",
+  "build": {
+    "beforeBuildCommand": "npm --prefix frontend run build",
+    "beforeDevCommand": "npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173",
+    "devUrl": "http://127.0.0.1:5173",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "智能商机挖掘助手",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 1040,
+        "minHeight": 720
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "msi", "deb"],
+    "externalBin": [
+      "binaries/opportunity-crawler-control-plane",
+      "binaries/opportunity-crawler-agent",
+      "binaries/opportunity-crawler-all-in-one"
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Allow only the named opportunity-crawler sidecars with explicit config arguments.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "opportunity-crawler-control-plane",
+          "sidecar": true,
+          "args": ["--config", { "validator": "^.+\\.toml$" }]
+        },
+        {
+          "name": "opportunity-crawler-agent",
+          "sidecar": true,
+          "args": ["--config", { "validator": "^.+\\.toml$" }]
+        },
+        {
+          "name": "opportunity-crawler-all-in-one",
+          "sidecar": true,
+          "args": ["--config", { "validator": "^.+\\.toml$" }]
+        }
+      ]
+    }
+  ]
+}
+

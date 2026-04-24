@@ -1,0 +1,14 @@
+/Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/deps/serde-373491ab1363c7c8.d: /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/build/serde-69a5f2f0a8f0990d/out/private.rs
+
+/Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/deps/libserde-373491ab1363c7c8.rlib: /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/build/serde-69a5f2f0a8f0990d/out/private.rs
+
+/Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/deps/libserde-373491ab1363c7c8.rmeta: /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/build/serde-69a5f2f0a8f0990d/out/private.rs
+
+/Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/build/serde-69a5f2f0a8f0990d/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/build/serde-69a5f2f0a8f0990d/out

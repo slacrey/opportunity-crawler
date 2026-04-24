@@ -1,0 +1,2 @@
+"""Source rule schema boundary."""
+

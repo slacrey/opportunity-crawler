@@ -1,0 +1,25 @@
+[shared]
+environment = "development"
+data_dir = "./var/data"
+log_dir = "./var/logs"
+tmp_dir = "./var/tmp"
+database_path = "./var/data/opportunity-crawler.db"
+evidence_dir = "./var/data/evidence"
+screenshots_dir = "./var/data/screenshots"
+browser_profiles_dir = "./var/data/browser-profiles"
+
+[control_plane]
+host = "127.0.0.1"
+port = 8000
+static_url_prefix = "/static"
+frontend_dist_dir = "./frontend/dist"
+
+[agent]
+agent_id = "local-agent"
+host_id = "local-host"
+capacity = 1
+max_concurrency = 1
+control_plane_base_url = "http://127.0.0.1:8000"
+
+[all_in_one]
+enabled_roles = ["control_plane", "agent"]

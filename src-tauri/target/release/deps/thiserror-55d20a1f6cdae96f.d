@@ -1,0 +1,14 @@
+/Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/deps/thiserror-55d20a1f6cdae96f.d: /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/build/thiserror-00cfaca9d986be6e/out/private.rs
+
+/Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/deps/libthiserror-55d20a1f6cdae96f.rlib: /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/build/thiserror-00cfaca9d986be6e/out/private.rs
+
+/Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/deps/libthiserror-55d20a1f6cdae96f.rmeta: /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/build/thiserror-00cfaca9d986be6e/out/private.rs
+
+/Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs:
+/Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs:
+/Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs:
+/Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs:
+/Users/linfeng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs:
+/Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/build/thiserror-00cfaca9d986be6e/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/linfeng/work/dev_work/opportunity-crawler/src-tauri/target/release/build/thiserror-00cfaca9d986be6e/out

@@ -2,3 +2,4 @@
 node_modules/
 .pyinstaller-cache
 /frontend/dist/
+/src-tauri/target/

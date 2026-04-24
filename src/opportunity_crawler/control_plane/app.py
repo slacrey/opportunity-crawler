@@ -4,11 +4,13 @@ import asyncio
 from pathlib import Path
 from typing import Any
 import json
+import uuid
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from opportunity_crawler.agent.runtime.collection_runner import CollectionRunner
 from opportunity_crawler.control_plane.routes.api.errors import ApiError, api_error
 from opportunity_crawler.control_plane.services.auth_service import AuthService, AuthenticatedUser
 from opportunity_crawler.control_plane.services.collection_run_service import CollectionRunService
@@ -19,7 +21,13 @@ from opportunity_crawler.control_plane.services.permission_service import Permis
 from opportunity_crawler.control_plane.services.review_service import ReviewService
 from opportunity_crawler.control_plane.services.runtime_registry import RuntimeRegistry
 from opportunity_crawler.control_plane.workers.notification_worker import NotificationWorker
-from opportunity_crawler.shared.contracts.agent_protocol import CollectionEventMessage, parse_agent_message
+from opportunity_crawler.shared.contracts.agent_protocol import (
+    CollectionCommandMessage,
+    CollectionEventKind,
+    CollectionEventMessage,
+    ControlPlaneCommandKind,
+    parse_agent_message,
+)
 from opportunity_crawler.shared.db.base import connect_sqlite
 from opportunity_crawler.shared.domain.audit import mask_audit_payload
 from opportunity_crawler.shared.domain.rules import RuleValidationError, validate_advanced_rule_config
@@ -79,6 +87,7 @@ def create_app(database_path: str | Path) -> FastAPI:
     app.state.auth_service = AuthService(app.state.database_path)
     app.state.permission_service = PermissionService()
     app.state.runtime_registry = RuntimeRegistry(app.state.database_path)
+    app.state.trial_browser_runtime = None
 
     @app.exception_handler(ApiError)
     async def handle_api_error(_: Request, exc: ApiError) -> Response:
@@ -334,13 +343,56 @@ def create_app(database_path: str | Path) -> FastAPI:
     async def trial_run_rule(source_id: int, version: int, payload: TrialRunRequest, request: Request) -> dict[str, Any]:
         _require_permission(request, "source.advanced_rules:update")
         with connect_sqlite(app.state.database_path) as connection:
-            _require_rule_version(connection, source_id, version)
+            row = _require_rule_version(connection, source_id, version)
+            rule = _advanced_rule_payload(row)
+
+        command = CollectionCommandMessage(
+            command=ControlPlaneCommandKind.TRIAL_RUN_ADVANCED_RULE,
+            command_id=f"trial-cmd-{uuid.uuid4()}",
+            run_id=f"trial-run-{uuid.uuid4()}",
+            source_id=source_id,
+            rule_version=version,
+            adapter_mode=str(rule["adapter_mode"]),
+            login_mode=str(rule["login_mode"]),
+            draft_rule_payload=_trial_rule_payload(rule),
+            max_items=payload.max_items,
+        )
+        result = await CollectionRunner(browser_runtime=app.state.trial_browser_runtime).trial_run_advanced_rule(command)
+        preview_rows = (
+            result.get("rows", [])
+            if result.get("event_kind") in {CollectionEventKind.TRIAL_RUN_COMPLETED, CollectionEventKind.TRIAL_RUN_COMPLETED.value}
+            else []
+        )
+        diagnostic_snapshot = dict(result.get("diagnostic_snapshot") or {})
+        if result.get("failure_kind"):
+            diagnostic_snapshot["failure_kind"] = result["failure_kind"]
+        if result.get("detail"):
+            diagnostic_snapshot["detail"] = result["detail"]
+
+        trial_snapshot = {
+            "event_kind": _event_kind_value(result.get("event_kind")),
+            "preview_rows": preview_rows,
+            "diagnostic_snapshot": diagnostic_snapshot,
+            "item_count": len(preview_rows),
+            "page_count": int(result.get("page_count") or 0),
+        }
+        with connect_sqlite(app.state.database_path) as connection:
+            connection.execute(
+                """
+                UPDATE source_advanced_rule_versions
+                SET trial_run_snapshot_json = ?
+                WHERE source_id = ? AND version = ?
+                """,
+                (_json(trial_snapshot), source_id, version),
+            )
+            connection.commit()
+
         return {
             "source_id": source_id,
             "version": version,
             "max_items": payload.max_items,
-            "preview_rows": [],
-            "diagnostic_snapshot": {"trial_run": True},
+            "preview_rows": preview_rows,
+            "diagnostic_snapshot": diagnostic_snapshot,
         }
 
     @app.post("/api/sources/{source_id}/advanced-rules/{version}/activate")
@@ -756,7 +808,7 @@ def create_app(database_path: str | Path) -> FastAPI:
     @app.get("/api/events")
     async def events(request: Request) -> Response:
         _require_user(request)
-        body = "event: snapshot\ndata: {\"status\":\"ok\"}\n\n"
+        body = f"event: snapshot\ndata: {_json(_runtime_snapshot(app))}\n\n"
         return Response(content=body, media_type="text/event-stream")
 
     @app.get("/api/health")
@@ -767,7 +819,7 @@ def create_app(database_path: str | Path) -> FastAPI:
             "database": {"ok": True},
             "migrations": {"ok": migration_count > 0},
             "agents": {"online": app.state.runtime_registry.online_count()},
-            "browser": {"ok": None, "detail": "not checked in API process"},
+            "browser": _browser_health(app),
         }
 
     return app
@@ -911,6 +963,51 @@ def _advanced_rule_payload(row: Any) -> dict[str, Any]:
         payload[output_field] = _read_json(payload.pop(field), {})
     payload["trial_run_snapshot"] = _read_json(payload.pop("trial_run_snapshot_json"), None)
     return payload
+
+
+def _trial_rule_payload(rule: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "entry_url": rule["entry_url"],
+        "selectors": rule.get("selectors") or {},
+        "pagination_policy": rule.get("pagination_policy") or {},
+        "normalization_mapping": rule.get("normalization_mapping") or {},
+        "attachment_policy": rule.get("attachment_policy") or {},
+        "risk_patterns": rule.get("risk_patterns") or {},
+        "rate_limit_policy": rule.get("rate_limit_policy") or {},
+        "retry_policy": rule.get("retry_policy") or {},
+    }
+
+
+def _event_kind_value(value: Any) -> str | None:
+    return value.value if hasattr(value, "value") else value
+
+
+def _runtime_snapshot(app: FastAPI) -> dict[str, Any]:
+    with connect_sqlite(app.state.database_path) as connection:
+        run_rows = connection.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM collection_runs
+            GROUP BY status
+            """
+        ).fetchall()
+    return {
+        "type": "snapshot",
+        "agents_online": app.state.runtime_registry.online_count(),
+        "runs": {str(row["status"]): int(row["count"]) for row in run_rows},
+    }
+
+
+def _browser_health(app: FastAPI) -> dict[str, Any]:
+    trial_runtime = getattr(app.state, "trial_browser_runtime", None)
+    has_trial_runtime = callable(getattr(trial_runtime, "fetch_html", None)) or callable(
+        getattr(trial_runtime, "open_url", None)
+    )
+    if has_trial_runtime:
+        return {"ok": True, "detail": "trial browser runtime configured"}
+    if app.state.runtime_registry.online_count() > 0:
+        return {"ok": True, "detail": "Agent online; browser execution delegated to Agent"}
+    return {"ok": False, "detail": "no Agent online and no trial browser runtime configured"}
 
 
 def _evidence_payload(row: Any) -> dict[str, Any]:

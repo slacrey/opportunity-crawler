@@ -5,9 +5,21 @@
         <h1 class="page-title">站点管理</h1>
         <p class="page-subtitle">两层规则、登录状态和采集健康</p>
       </div>
-      <button class="primary-button" type="button" :disabled="sources.loading" @click="refreshSources">刷新站点</button>
+      <div class="action-row page-actions">
+        <button class="secondary-button" type="button" :disabled="sources.loading" @click="refreshSources">刷新站点</button>
+        <button
+          class="primary-button"
+          type="button"
+          data-test="start-collection"
+          :disabled="!canStartCollection || collectionBusy"
+          @click="startCollection"
+        >
+          启动采集
+        </button>
+      </div>
     </div>
-    <p v-if="sources.error" class="state-message state-error">{{ sources.error }}</p>
+    <p v-if="sources.error || runtime.error" class="state-message state-error">{{ sources.error || runtime.error }}</p>
+    <p v-if="operationMessage" class="state-message state-info">{{ operationMessage }}</p>
     <DataTableShell title="采集站点">
       <table class="data-table">
         <thead>
@@ -81,15 +93,20 @@ import DataTableShell from '../components/DataTableShell.vue'
 import SourceRuleDrawer from '../components/SourceRuleDrawer.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import { useAuthStore } from '../stores/auth'
+import { useRuntimeStore } from '../stores/runtime'
 import { useSourcesStore } from '../stores/sources'
 
 const auth = useAuthStore()
+const runtime = useRuntimeStore()
 const sources = useSourcesStore()
 const selectedSourceId = ref<number | null>(null)
 const ruleMessage = ref('')
 const ruleBusy = ref(false)
+const collectionBusy = ref(false)
+const operationMessage = ref('')
 const canUpdateBasicRules = computed(() => auth.can('source.basic_rules:update'))
 const canUpdateAdvancedRules = computed(() => auth.can('source.advanced_rules:update'))
+const canStartCollection = computed(() => selectedSourceId.value !== null && auth.can('collection_runs:manage'))
 const advancedRule = computed(() => {
   const active = sources.selectedDetail?.active_rule
   if (active) return active as Record<string, unknown>
@@ -111,7 +128,20 @@ async function refreshSources() {
 async function selectSource(sourceId: number) {
   selectedSourceId.value = sourceId
   ruleMessage.value = ''
+  operationMessage.value = ''
   await Promise.all([sources.loadSourceDetail(sourceId), sources.loadAdvancedRules(sourceId)])
+}
+
+async function startCollection() {
+  if (selectedSourceId.value === null || !canStartCollection.value || collectionBusy.value) return
+  collectionBusy.value = true
+  operationMessage.value = ''
+  try {
+    const result = await runtime.startCollectionRun(selectedSourceId.value)
+    operationMessage.value = `采集已启动：${result.run.run_id}`
+  } finally {
+    collectionBusy.value = false
+  }
 }
 
 async function saveBasicRules(payload: Record<string, unknown>) {
@@ -167,6 +197,10 @@ async function rollbackRule(version: number) {
 .source-edit-grid {
   margin-top: 16px;
   align-items: start;
+}
+
+.page-actions {
+  justify-content: flex-end;
 }
 
 .selected-row {

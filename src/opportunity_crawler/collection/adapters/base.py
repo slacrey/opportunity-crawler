@@ -19,3 +19,6 @@ class CollectionResult:
 class BaseAdapter:
     mode: str
 
+    def collect(self, context: dict[str, Any]) -> CollectionResult:
+        _ = context
+        raise NotImplementedError(f"adapter mode {getattr(self, 'mode', 'unknown')} does not implement collect")

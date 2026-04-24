@@ -51,6 +51,17 @@ export const useRuntimeStore = defineStore('runtime', {
         throw error
       }
     },
+    async startCollectionRun(sourceId: number, client: Pick<ApiClient, 'post'> = apiClient) {
+      this.error = null
+      try {
+        const response = await client.post<{ run: RunState }>(`/api/sources/${sourceId}/collection-runs`)
+        this.runs[response.run.run_id] = response.run
+        return response
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : '启动采集失败'
+        throw error
+      }
+    },
     applyEvent(event: RuntimeEvent) {
       if (!event.run_id) return
       const status = event.type.replace(/^run_/, '')

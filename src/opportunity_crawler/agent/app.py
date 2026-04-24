@@ -4,7 +4,12 @@ from typing import Any
 
 from opportunity_crawler.agent.runtime.collection_runner import CollectionRunner
 from opportunity_crawler.agent.runtime.command_handlers import CommandHandlers
-from opportunity_crawler.shared.contracts.agent_protocol import CollectionCommandMessage, parse_control_plane_message
+from opportunity_crawler.shared.contracts.agent_protocol import (
+    CollectionCommandMessage,
+    CollectionEventKind,
+    ControlPlaneCommandKind,
+    parse_control_plane_message,
+)
 
 
 class CollectionAgentApp:
@@ -17,8 +22,15 @@ class CollectionAgentApp:
         command = payload if isinstance(payload, CollectionCommandMessage) else parse_control_plane_message(payload)
         if not isinstance(command, CollectionCommandMessage):
             raise TypeError(f"expected collection command, got {command.message_type}")
+        if self.client is not None and command.command is ControlPlaneCommandKind.START_COLLECTION_RUN:
+            await self.client.send_collection_event(
+                event_kind=CollectionEventKind.RUN_STARTED,
+                command_id=command.command_id,
+                run_id=command.run_id,
+                source_id=command.source_id,
+                adapter_mode=command.adapter_mode,
+            )
         result = await self.handlers.handle(command)
         if self.client is not None:
             await self.client.send_collection_event(**result)
         return result
-

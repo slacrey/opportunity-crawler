@@ -30,7 +30,15 @@ class CollectionRunService:
             source = connection.execute(
                 """
                 SELECT s.id, s.name, s.enabled, s.adapter_mode, s.login_mode,
-                       arv.version AS rule_version
+                       arv.version AS rule_version,
+                       arv.entry_url,
+                       arv.selectors_json,
+                       arv.pagination_policy_json,
+                       arv.normalization_mapping_json,
+                       arv.attachment_policy_json,
+                       arv.risk_patterns_json,
+                       arv.rate_limit_policy_json,
+                       arv.retry_policy_json
                 FROM sources s
                 LEFT JOIN source_advanced_rule_versions arv
                     ON arv.id = s.active_rule_version_id
@@ -74,6 +82,7 @@ class CollectionRunService:
             rule_version=int(source["rule_version"]),
             adapter_mode=str(source["adapter_mode"]),
             login_mode=str(source["login_mode"]),
+            rule_payload=_rule_payload(source),
         ).model_dump(mode="json")
         return {"run": collection_run_payload(row), "command": command}
 
@@ -157,6 +166,19 @@ def collection_run_payload(row: Any) -> dict[str, Any]:
     payload = dict(row)
     payload["diagnostic_snapshot"] = _read_json(payload.pop("diagnostic_snapshot_json"), {})
     return payload
+
+
+def _rule_payload(row: Any) -> dict[str, Any]:
+    return {
+        "entry_url": row["entry_url"],
+        "selectors": _read_json(row["selectors_json"], {}),
+        "pagination_policy": _read_json(row["pagination_policy_json"], {}),
+        "normalization_mapping": _read_json(row["normalization_mapping_json"], {}),
+        "attachment_policy": _read_json(row["attachment_policy_json"], {}),
+        "risk_patterns": _read_json(row["risk_patterns_json"], {}),
+        "rate_limit_policy": _read_json(row["rate_limit_policy_json"], {}),
+        "retry_policy": _read_json(row["retry_policy_json"], {}),
+    }
 
 
 def _persist_evidence_rows(connection: sqlite3.Connection, event: CollectionEventMessage) -> int:

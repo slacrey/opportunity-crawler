@@ -127,6 +127,28 @@ describe('control panel stores', () => {
     expect(runtime.health?.database.ok).toBe(true)
   })
 
+  it('starts a collection run for a selected source', async () => {
+    const runtime = useRuntimeStore()
+
+    const result = await runtime.startCollectionRun(1, {
+      post: async (path: string) => {
+        expect(path).toBe('/api/sources/1/collection-runs')
+        return {
+          run: {
+            run_id: 'run-started',
+            source_id: 1,
+            source_name: '中国政府采购网',
+            status: 'queued',
+            item_count: 0
+          }
+        }
+      }
+    })
+
+    expect(result.run.run_id).toBe('run-started')
+    expect(runtime.runs['run-started'].status).toBe('queued')
+  })
+
   it('loads operational list stores from their backend endpoints', async () => {
     const agents = useAgentsStore()
     const notifications = useNotificationsStore()

@@ -65,6 +65,7 @@ class CollectionCommandMessage(BaseModel):
     source_account_id: int | None = None
     deadline_at: str | None = None
     reason: str | None = None
+    rule_payload: dict[str, Any] | None = None
     draft_rule_payload: dict[str, Any] | None = None
     max_items: int | None = None
 
@@ -110,4 +111,3 @@ def parse_control_plane_message(payload: object) -> ControlPlaneMessage:
     if message_type == "collection_command":
         return CollectionCommandMessage.model_validate(payload)
     raise ValueError(f"unsupported control-plane message_type: {message_type}")
-

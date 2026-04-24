@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
+import json
 import sqlite3
 from pathlib import Path
 
+from opportunity_crawler.agent.app import CollectionAgentApp
+from opportunity_crawler.shared.contracts.agent_protocol import CollectionEventKind
 from opportunity_crawler.control_plane.services.auth_service import AuthService
 
 
@@ -118,6 +122,41 @@ def test_agent_dev_runner_derives_websocket_url_and_keeps_heartbeat_loop() -> No
     assert "KeyboardInterrupt" in content
 
 
+def test_agent_dev_runner_consumes_collection_command_and_sends_events() -> None:
+    module = _load_script_module(ROOT / "scripts" / "run_agent_dev.py")
+    asyncio.run(_assert_agent_dev_runner_consumes_collection_command_and_sends_events(module))
+
+
+async def _assert_agent_dev_runner_consumes_collection_command_and_sends_events(module) -> None:
+    websocket = FakeAgentWebSocket(
+        [
+            {
+                "message_type": "collection_command",
+                "command": "start_collection_run",
+                "command_id": "cmd-1",
+                "run_id": "run-1",
+                "source_id": 1,
+                "rule_version": 1,
+                "adapter_mode": "manual_import",
+                "login_mode": "not_required",
+            }
+        ]
+    )
+    app = CollectionAgentApp(
+        runner=FakeRunner(),
+        client=module.WebSocketEventClient(websocket),
+    )
+
+    await module.run_agent_message_loop(websocket, app, agent_id="agent-dev", heartbeat_interval=60, once=True)
+
+    assert websocket.sent[0]["message_type"] == "collection_event"
+    assert websocket.sent[0]["event_kind"] == "run_started"
+    assert websocket.sent[0]["run_id"] == "run-1"
+    assert websocket.sent[1]["message_type"] == "collection_event"
+    assert websocket.sent[1]["event_kind"] == "run_succeeded"
+    assert websocket.sent[1]["diagnostic_snapshot"] == {"from_runner": True}
+
+
 def test_vite_dev_server_proxies_api_to_control_plane() -> None:
     content = (ROOT / "frontend" / "vite.config.ts").read_text(encoding="utf-8")
 
@@ -174,3 +213,30 @@ def _load_script_module(path: Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+class FakeAgentWebSocket:
+    def __init__(self, received: list[dict[str, object]]) -> None:
+        self.received = [json.dumps(message) for message in received]
+        self.sent: list[dict[str, object]] = []
+
+    async def send(self, payload: str) -> None:
+        self.sent.append(json.loads(payload))
+
+    async def recv(self) -> str:
+        return self.received.pop(0)
+
+
+class FakeRunner:
+    async def start_collection_run(self, command):
+        return {
+            "event_kind": CollectionEventKind.RUN_SUCCEEDED,
+            "command_id": command.command_id,
+            "run_id": command.run_id,
+            "source_id": command.source_id,
+            "adapter_mode": command.adapter_mode,
+            "page_count": 1,
+            "item_count": 0,
+            "rows": [],
+            "diagnostic_snapshot": {"from_runner": True},
+        }

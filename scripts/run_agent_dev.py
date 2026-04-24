@@ -17,7 +17,11 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from opportunity_crawler.agent.app import CollectionAgentApp
+from opportunity_crawler.agent.browser.camoufox_runtime import CamoufoxRuntime
+from opportunity_crawler.agent.runtime.collection_runner import CollectionRunner
 from opportunity_crawler.bootstrap.agent import build_runtime
+from opportunity_crawler.shared.contracts.agent_protocol import CollectionEventMessage
 
 
 DEFAULT_CONFIG = ROOT / "packaging" / "defaults" / "agent.toml"
@@ -46,7 +50,40 @@ def wait_for_control_plane(base_url: str, timeout_seconds: float) -> None:
 
 async def send_heartbeat(websocket: Any, agent_id: str) -> None:
     await websocket.send(json.dumps({"type": "heartbeat", "agent_id": agent_id}))
-    await websocket.recv()
+
+
+class WebSocketEventClient:
+    def __init__(self, websocket: Any) -> None:
+        self.websocket = websocket
+
+    async def send_collection_event(self, **payload: Any) -> None:
+        event = CollectionEventMessage(message_type="collection_event", **payload)
+        await self.websocket.send(json.dumps(event.model_dump(mode="json")))
+
+
+async def run_agent_message_loop(
+    websocket: Any,
+    app: CollectionAgentApp,
+    *,
+    agent_id: str,
+    heartbeat_interval: float,
+    once: bool = False,
+) -> None:
+    while True:
+        try:
+            raw_payload = await asyncio.wait_for(websocket.recv(), timeout=heartbeat_interval)
+        except asyncio.TimeoutError:
+            await send_heartbeat(websocket, agent_id)
+            continue
+
+        payload = json.loads(raw_payload)
+        message_type = payload.get("message_type") or payload.get("type")
+        if message_type == "collection_command":
+            await app.handle_command(payload)
+            if once:
+                return
+        elif once:
+            return
 
 
 async def run_agent(config_path: Path, heartbeat_interval: float, startup_timeout: float, once: bool) -> None:
@@ -80,9 +117,19 @@ async def run_agent(config_path: Path, heartbeat_interval: float, startup_timeou
         if once:
             return
 
-        while True:
-            await asyncio.sleep(heartbeat_interval)
-            await send_heartbeat(websocket, settings.agent.agent_id)
+        event_client = WebSocketEventClient(websocket)
+        browser_runtime = CamoufoxRuntime(browser_profiles_dir=settings.shared.browser_profiles_dir)
+        app = CollectionAgentApp(
+            runner=CollectionRunner(browser_runtime=browser_runtime),
+            client=event_client,
+        )
+
+        await run_agent_message_loop(
+            websocket,
+            app,
+            agent_id=settings.agent.agent_id,
+            heartbeat_interval=heartbeat_interval,
+        )
 
 
 def main(argv: list[str] | None = None) -> None:

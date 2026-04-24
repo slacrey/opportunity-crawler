@@ -32,3 +32,17 @@ def test_camoufox_runtime_uses_source_account_profile_directory(tmp_path: Path) 
     runtime.ensure_session_alive(session.session_id)
     runtime.close_session(session.session_id)
 
+
+def test_camoufox_runtime_fetches_html_through_configured_fetcher(tmp_path: Path) -> None:
+    requested_urls: list[str] = []
+
+    def html_fetcher(url: str) -> str:
+        requested_urls.append(url)
+        return "<html><body>ok</body></html>"
+
+    runtime = CamoufoxRuntime(browser_profiles_dir=tmp_path, html_fetcher=html_fetcher)
+
+    html = runtime.fetch_html("https://example.test")
+
+    assert html == "<html><body>ok</body></html>"
+    assert requested_urls == ["https://example.test"]

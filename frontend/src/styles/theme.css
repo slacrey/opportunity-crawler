@@ -132,6 +132,12 @@ select {
   border: 1px solid #fecdca;
 }
 
+.state-info {
+  color: #175cd3;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

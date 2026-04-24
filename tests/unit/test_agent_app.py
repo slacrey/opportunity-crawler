@@ -58,5 +58,7 @@ async def _assert_agent_app_handles_start_collection_run_command() -> None:
         }
     )
 
-    assert client.events[0]["event_kind"] is CollectionEventKind.RUN_SUCCEEDED
+    assert client.events[0]["event_kind"] is CollectionEventKind.RUN_STARTED
     assert client.events[0]["run_id"] == "run-1"
+    assert client.events[1]["event_kind"] is CollectionEventKind.RUN_SUCCEEDED
+    assert client.events[1]["run_id"] == "run-1"

@@ -11,6 +11,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from tests.integration.api_helpers import auth_headers, build_client, first_source_id
+from opportunity_crawler.collection.adapters.base import CollectionResult
 from opportunity_crawler.agent.runtime.collection_runner import CollectionRunner
 from opportunity_crawler.shared.contracts.agent_protocol import CollectionEventKind, CollectionCommandMessage
 from opportunity_crawler.shared.db.base import connect_sqlite
@@ -48,6 +49,8 @@ def test_control_plane_dispatches_collection_run_and_persists_agent_events(tmp_p
         assert command["command"] == "start_collection_run"
         assert command["run_id"] == run["run_id"]
         assert command["source_id"] == source_id
+        assert command["rule_payload"]["entry_url"] == "https://www.ccgp.gov.cn"
+        assert command["rule_payload"]["selectors"]["list_selector"] == ".result"
 
         websocket.send_json(
             {
@@ -121,8 +124,20 @@ def test_collection_runner_returns_trial_run_preview_without_persistence() -> No
     asyncio.run(_assert_collection_runner_returns_trial_run_preview_without_persistence())
 
 
+def test_collection_runner_invokes_adapter_with_browser_context() -> None:
+    asyncio.run(_assert_collection_runner_invokes_adapter_with_browser_context())
+
+
 async def _assert_collection_runner_returns_trial_run_preview_without_persistence() -> None:
-    runner = CollectionRunner()
+    adapter = FakeAdapter(
+        rows=[
+            {"title": "试运行第一条", "raw_text": "正文 1"},
+            {"title": "试运行第二条", "raw_text": "正文 2"},
+        ]
+    )
+    registry = FakeAdapterRegistry(adapter)
+    browser_runtime = object()
+    runner = CollectionRunner(adapter_registry=registry, browser_runtime=browser_runtime)
     command = CollectionCommandMessage(
         message_type="collection_command",
         command="trial_run_advanced_rule",
@@ -130,14 +145,71 @@ async def _assert_collection_runner_returns_trial_run_preview_without_persistenc
         run_id="trial-1",
         source_id=10,
         rule_version=2,
-        adapter_mode="manual_import",
+        adapter_mode="fake_adapter",
         login_mode="not_required",
-        draft_rule_payload={"adapter_mode": "manual_import"},
+        draft_rule_payload={"entry_url": "https://example.test/search"},
         max_items=1,
     )
 
     result = await runner.trial_run_advanced_rule(command)
 
+    assert registry.resolved_modes == ["fake_adapter"]
+    assert adapter.contexts[0]["command"] is command
+    assert adapter.contexts[0]["browser_runtime"] is browser_runtime
     assert result["event_kind"] is CollectionEventKind.TRIAL_RUN_COMPLETED
-    assert result["rows"] == []
+    assert result["rows"] == [{"title": "试运行第一条", "raw_text": "正文 1"}]
+    assert result["item_count"] == 1
     assert result["diagnostic_snapshot"]["trial_run"] is True
+    assert result["diagnostic_snapshot"]["adapter_mode"] == "fake_adapter"
+
+
+async def _assert_collection_runner_invokes_adapter_with_browser_context() -> None:
+    adapter = FakeAdapter()
+    registry = FakeAdapterRegistry(adapter)
+    browser_runtime = object()
+    runner = CollectionRunner(adapter_registry=registry, browser_runtime=browser_runtime)
+    command = CollectionCommandMessage(
+        message_type="collection_command",
+        command="start_collection_run",
+        command_id="cmd-adapter",
+        run_id="run-adapter",
+        source_id=10,
+        rule_version=1,
+        adapter_mode="fake_adapter",
+        login_mode="not_required",
+    )
+
+    result = await runner.start_collection_run(command)
+
+    assert registry.resolved_modes == ["fake_adapter"]
+    assert adapter.contexts[0]["command"] is command
+    assert adapter.contexts[0]["browser_runtime"] is browser_runtime
+    assert result["event_kind"] is CollectionEventKind.RUN_SUCCEEDED
+    assert result["rows"] == [{"title": "适配器采集结果", "raw_text": "正文"}]
+    assert result["diagnostic_snapshot"]["adapter_mode"] == "fake_adapter"
+
+
+class FakeAdapterRegistry:
+    def __init__(self, adapter: "FakeAdapter") -> None:
+        self.adapter = adapter
+        self.resolved_modes: list[str] = []
+
+    def resolve(self, mode: str) -> "FakeAdapter":
+        self.resolved_modes.append(mode)
+        return self.adapter
+
+
+class FakeAdapter:
+    mode = "fake_adapter"
+
+    def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
+        self.contexts: list[dict[str, object]] = []
+        self.rows = rows or [{"title": "适配器采集结果", "raw_text": "正文"}]
+
+    def collect(self, context: dict[str, object]) -> CollectionResult:
+        self.contexts.append(context)
+        return CollectionResult(
+            rows=self.rows,
+            page_count=1,
+            diagnostic_snapshot={"adapter_mode": self.mode},
+        )

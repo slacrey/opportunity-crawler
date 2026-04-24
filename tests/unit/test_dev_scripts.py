@@ -16,6 +16,9 @@ def test_dev_scripts_reference_opportunity_crawler_package() -> None:
         ROOT / "scripts" / "run_control_plane_dev.py",
         ROOT / "scripts" / "run_agent_dev.py",
         ROOT / "scripts" / "package_app.sh",
+        ROOT / "scripts" / "start_backend.sh",
+        ROOT / "scripts" / "start_frontend.sh",
+        ROOT / "scripts" / "start_agent.sh",
     ]
 
     for script_path in expected_scripts:
@@ -79,6 +82,42 @@ def test_start_dev_script_runs_backend_health_check_then_frontend() -> None:
     assert "OPPORTUNITY_CRAWLER_CONTROL_PLANE_PORT" in content
 
 
+def test_segmented_start_scripts_launch_independent_dev_processes() -> None:
+    backend = (ROOT / "scripts" / "start_backend.sh").read_text(encoding="utf-8")
+    frontend = (ROOT / "scripts" / "start_frontend.sh").read_text(encoding="utf-8")
+    agent = (ROOT / "scripts" / "start_agent.sh").read_text(encoding="utf-8")
+
+    assert "run_control_plane_dev.py" in backend
+    assert "PYTHON_CMD" in backend
+    assert "uv run python" in backend
+    assert "OPPORTUNITY_CRAWLER_PYTHON" in backend
+    assert backend.index("uv run python") < backend.index(".venv/bin/python")
+    assert "OPPORTUNITY_CRAWLER_CONTROL_PLANE_PORT" in backend
+
+    assert "VITE_API_PROXY_TARGET" in frontend
+    assert 'npm --prefix "$ROOT_DIR/frontend" run dev' in frontend
+    assert "OPPORTUNITY_CRAWLER_CONTROL_PLANE_PORT" in frontend
+
+    assert "run_agent_dev.py" in agent
+    assert "OPPORTUNITY_CRAWLER_AGENT_CONTROL_PLANE_BASE_URL" in agent
+    assert "PYTHON_CMD" in agent
+    assert "uv run python" in agent
+    assert "OPPORTUNITY_CRAWLER_PYTHON" in agent
+    assert agent.index("uv run python") < agent.index(".venv/bin/python")
+
+
+def test_agent_dev_runner_derives_websocket_url_and_keeps_heartbeat_loop() -> None:
+    module = _load_script_module(ROOT / "scripts" / "run_agent_dev.py")
+
+    assert module.control_plane_ws_url("http://127.0.0.1:8000") == "ws://127.0.0.1:8000/api/agents/ws"
+    assert module.control_plane_ws_url("https://control.example/base") == "wss://control.example/base/api/agents/ws"
+
+    content = (ROOT / "scripts" / "run_agent_dev.py").read_text(encoding="utf-8")
+    assert "asyncio.run" in content
+    assert "send_heartbeat" in content
+    assert "KeyboardInterrupt" in content
+
+
 def test_vite_dev_server_proxies_api_to_control_plane() -> None:
     content = (ROOT / "frontend" / "vite.config.ts").read_text(encoding="utf-8")
 
@@ -93,12 +132,14 @@ def test_python_project_declares_dev_startup_runtime_dependencies() -> None:
 
     assert "fastapi" in content
     assert "uvicorn" in content
+    assert "websockets" in content
 
 
 def test_dev_runtime_artifacts_are_gitignored() -> None:
     content = (ROOT / ".gitignore").read_text(encoding="utf-8")
 
     assert "/var/" in content
+    assert ".venv/" in content
     assert "__pycache__/" in content
     assert "*.pyc" in content
 

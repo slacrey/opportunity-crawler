@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 import json
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 
 from opportunity_crawler.control_plane.routes.api.errors import ApiError, api_error
 from opportunity_crawler.control_plane.services.auth_service import AuthService, AuthenticatedUser
+from opportunity_crawler.control_plane.services.collection_run_service import CollectionRunService
 from opportunity_crawler.control_plane.services.customer_service import CustomerService
 from opportunity_crawler.control_plane.services.goal_service import GoalService
 from opportunity_crawler.control_plane.services.normalization_service import CandidateCreationService, ManualCandidateInput
@@ -17,6 +19,7 @@ from opportunity_crawler.control_plane.services.permission_service import Permis
 from opportunity_crawler.control_plane.services.review_service import ReviewService
 from opportunity_crawler.control_plane.services.runtime_registry import RuntimeRegistry
 from opportunity_crawler.control_plane.workers.notification_worker import NotificationWorker
+from opportunity_crawler.shared.contracts.agent_protocol import CollectionEventMessage, parse_agent_message
 from opportunity_crawler.shared.db.base import connect_sqlite
 from opportunity_crawler.shared.domain.audit import mask_audit_payload
 from opportunity_crawler.shared.domain.rules import RuleValidationError, validate_advanced_rule_config
@@ -39,6 +42,10 @@ class BasicRuleUpdate(BaseModel):
 
 class TrialRunRequest(BaseModel):
     max_items: int = 5
+
+
+class StartCollectionRunRequest(BaseModel):
+    agent_id: str | None = None
 
 
 class ManualImportRequest(BaseModel):
@@ -559,6 +566,64 @@ def create_app(database_path: str | Path) -> FastAPI:
             "offset": normalized_offset,
         }
 
+    @app.post("/api/sources/{source_id}/collection-runs", status_code=201)
+    async def start_collection_run(
+        source_id: int,
+        request: Request,
+        payload: StartCollectionRunRequest | None = None,
+    ) -> dict[str, Any]:
+        _require_permission(request, "collection_runs:manage")
+        try:
+            agent = app.state.runtime_registry.choose_agent(payload.agent_id if payload else None)
+        except KeyError as exc:
+            raise ApiError("agent_unavailable", "No online Agent is available for collection", status_code=409) from exc
+
+        service = CollectionRunService(app.state.database_path)
+        try:
+            result = service.start_run(source_id=source_id, agent_id=str(agent["agent_id"]))
+        except KeyError as exc:
+            raise ApiError("not_found", "Source not found", status_code=404) from exc
+        except ValueError as exc:
+            raise ApiError("validation_error", str(exc), status_code=422) from exc
+
+        app.state.runtime_registry.dispatch_command(str(agent["agent_id"]), result["command"])
+        return result
+
+    @app.get("/api/collection-runs/{run_id}/evidence")
+    async def collection_run_evidence(run_id: str, request: Request, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        _require_user(request)
+        normalized_limit = max(1, min(limit, 500))
+        normalized_offset = max(0, offset)
+        with connect_sqlite(app.state.database_path) as connection:
+            run = connection.execute(
+                "SELECT run_id FROM collection_runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if run is None:
+                raise ApiError("not_found", "Collection run not found", status_code=404)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM raw_evidence_items
+                WHERE run_id = ?
+                ORDER BY id
+                LIMIT ? OFFSET ?
+                """,
+                (run_id, normalized_limit, normalized_offset),
+            ).fetchall()
+            total = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM raw_evidence_items WHERE run_id = ?",
+                    (run_id,),
+                ).fetchone()[0]
+            )
+        return {
+            "items": [_evidence_payload(row) for row in rows],
+            "total": total,
+            "limit": normalized_limit,
+            "offset": normalized_offset,
+        }
+
     @app.get("/api/agents")
     async def list_agents(request: Request) -> dict[str, Any]:
         _require_user(request)
@@ -630,17 +695,61 @@ def create_app(database_path: str | Path) -> FastAPI:
     @app.websocket("/api/agents/ws")
     async def agent_websocket(websocket: WebSocket) -> None:
         await websocket.accept()
+        agent_id: str | None = None
+        protocol_mode = "legacy"
         try:
             while True:
-                message = await websocket.receive_json()
-                if message.get("type") == "register":
+                if agent_id is not None:
+                    await _drain_agent_commands(websocket, app.state.runtime_registry, agent_id)
+                try:
+                    message = await asyncio.wait_for(websocket.receive_json(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+
+                message_type = message.get("message_type") or message.get("type")
+                if message_type == "register":
+                    protocol_mode = "protocol" if message.get("message_type") == "register" else "legacy"
                     presence = app.state.runtime_registry.register(message)
-                    await websocket.send_json({"type": "registered", "agent_id": presence["agent_id"]})
-                elif message.get("type") == "heartbeat":
+                    agent_id = presence["agent_id"]
+                    if protocol_mode == "protocol":
+                        await websocket.send_json(
+                            {
+                                "message_type": "registered",
+                                "agent_id": presence["agent_id"],
+                                "host_id": presence["host_id"],
+                            }
+                        )
+                    else:
+                        await websocket.send_json({"type": "registered", "agent_id": presence["agent_id"]})
+                elif message_type == "heartbeat":
                     presence = app.state.runtime_registry.heartbeat(str(message["agent_id"]))
-                    await websocket.send_json({"type": "heartbeat_ack", "agent_id": presence["agent_id"]})
+                    if protocol_mode == "protocol":
+                        await websocket.send_json({"message_type": "heartbeat_ack", "agent_id": presence["agent_id"]})
+                    else:
+                        await websocket.send_json({"type": "heartbeat_ack", "agent_id": presence["agent_id"]})
+                elif message_type == "collection_event":
+                    try:
+                        parsed = parse_agent_message(message)
+                    except ValueError as exc:
+                        await _send_agent_error(websocket, protocol_mode, "invalid_message", str(exc))
+                        continue
+                    if not isinstance(parsed, CollectionEventMessage):
+                        await _send_agent_error(websocket, protocol_mode, "invalid_message", "Expected collection_event")
+                        continue
+                    try:
+                        CollectionRunService(app.state.database_path).record_event(agent_id=agent_id, event=parsed)
+                    except KeyError:
+                        await _send_agent_error(websocket, protocol_mode, "not_found", "Collection run not found")
+                        continue
+                    await websocket.send_json(
+                        {
+                            "message_type": "collection_event_ack",
+                            "event_kind": parsed.event_kind.value,
+                            "run_id": parsed.run_id,
+                        }
+                    )
                 else:
-                    await websocket.send_json({"type": "error", "code": "unsupported_message"})
+                    await _send_agent_error(websocket, protocol_mode, "unsupported_message", "Unsupported Agent message")
         except WebSocketDisconnect:
             return
 
@@ -662,6 +771,18 @@ def create_app(database_path: str | Path) -> FastAPI:
         }
 
     return app
+
+
+async def _drain_agent_commands(websocket: WebSocket, registry: RuntimeRegistry, agent_id: str) -> None:
+    for command in registry.pop_commands(agent_id):
+        await websocket.send_json(command)
+
+
+async def _send_agent_error(websocket: WebSocket, protocol_mode: str, code: str, message: str) -> None:
+    if protocol_mode == "protocol":
+        await websocket.send_json({"message_type": "error", "code": code, "message": message})
+    else:
+        await websocket.send_json({"type": "error", "code": code, "message": message})
 
 
 def _require_user(request: Request) -> AuthenticatedUser:

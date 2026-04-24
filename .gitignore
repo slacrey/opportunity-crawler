@@ -6,3 +6,7 @@ node_modules/
 /src-tauri/binaries/
 /build/
 /.idea/
+/var/
+/.playwright-cli/
+__pycache__/
+*.pyc

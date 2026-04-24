@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import importlib.util
+import sqlite3
 from pathlib import Path
+
+from opportunity_crawler.control_plane.services.auth_service import AuthService
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,3 +34,78 @@ def test_frontend_vite_env_typings_only_expose_non_secret_runtime_urls() -> None
     assert "SECRET" not in content
     assert "TOKEN" not in content
     assert "PASSWORD" not in content
+
+
+def test_control_plane_dev_runner_prepares_database_and_seed_users(tmp_path: Path) -> None:
+    module = _load_script_module(ROOT / "scripts" / "run_control_plane_dev.py")
+    database_path = tmp_path / "data" / "opportunity.db"
+
+    module.prepare_database(database_path)
+
+    with sqlite3.connect(database_path) as connection:
+        migration_count = connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
+        admin = connection.execute(
+            """
+            SELECT u.password_hash, r.name
+            FROM users u
+            JOIN user_roles ur ON ur.user_id = u.id
+            JOIN roles r ON r.id = ur.role_id
+            WHERE u.username = 'admin'
+            """,
+        ).fetchone()
+        business_user = connection.execute(
+            """
+            SELECT u.password_hash, r.name
+            FROM users u
+            JOIN user_roles ur ON ur.user_id = u.id
+            JOIN roles r ON r.id = ur.role_id
+            WHERE u.username = 'biz'
+            """,
+        ).fetchone()
+
+    assert migration_count > 0
+    assert admin == (AuthService.hash_password("admin-pass"), "administrator")
+    assert business_user == (AuthService.hash_password("biz-pass"), "business_manager")
+
+
+def test_start_dev_script_runs_backend_health_check_then_frontend() -> None:
+    content = (ROOT / "scripts" / "start_dev.sh").read_text(encoding="utf-8")
+
+    assert "run_control_plane_dev.py" in content
+    assert "/api/health" in content
+    assert "npm --prefix \"$ROOT_DIR/frontend\" run dev" in content
+    assert "trap cleanup EXIT INT TERM" in content
+    assert "OPPORTUNITY_CRAWLER_CONTROL_PLANE_PORT" in content
+
+
+def test_vite_dev_server_proxies_api_to_control_plane() -> None:
+    content = (ROOT / "frontend" / "vite.config.ts").read_text(encoding="utf-8")
+
+    assert "'/api'" in content
+    assert "process.env.VITE_API_PROXY_TARGET ?? 'http://127.0.0.1:8000'" in content
+    assert "target: apiProxyTarget" in content
+    assert "ws: true" in content
+
+
+def test_python_project_declares_dev_startup_runtime_dependencies() -> None:
+    content = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert "fastapi" in content
+    assert "uvicorn" in content
+
+
+def test_dev_runtime_artifacts_are_gitignored() -> None:
+    content = (ROOT / ".gitignore").read_text(encoding="utf-8")
+
+    assert "/var/" in content
+    assert "__pycache__/" in content
+    assert "*.pyc" in content
+
+
+def _load_script_module(path: Path):
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module

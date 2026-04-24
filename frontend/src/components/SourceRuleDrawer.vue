@@ -6,7 +6,7 @@
         <p class="page-subtitle">{{ sourceName }}</p>
       </div>
     </div>
-    <form class="form-grid" @submit.prevent="$emit('save', form)">
+    <form class="form-grid" @submit.prevent="emitSave">
       <label class="field-label">
         地区
         <input v-model="form.regions" class="field-input" />
@@ -23,21 +23,54 @@
           <option value="manual">manual</option>
         </select>
       </label>
-      <button class="primary-button" type="submit">保存</button>
+      <button class="primary-button" type="submit" data-test="basic-rules-save" :disabled="disabled">保存</button>
     </form>
   </section>
 </template>
 
 <script setup lang="ts">
-import { reactive } from 'vue'
+import { reactive, watch } from 'vue'
 
-defineProps<{ sourceName: string }>()
-defineEmits<{ save: [payload: Record<string, string>] }>()
+const props = defineProps<{
+  sourceName: string
+  modelValue?: Record<string, unknown> | null
+  disabled?: boolean
+}>()
+const emit = defineEmits<{ save: [payload: Record<string, unknown>] }>()
 
 const form = reactive({
-  regions: '昆山,太仓',
-  demand_keywords: 'AI,云平台',
+  regions: '',
+  demand_keywords: '',
   frequency: 'daily'
 })
-</script>
 
+watch(
+  () => props.modelValue,
+  (value) => {
+    form.regions = listToText(value?.regions)
+    form.demand_keywords = listToText(value?.demand_keywords)
+    form.frequency = typeof value?.frequency === 'string' ? value.frequency : 'daily'
+  },
+  { immediate: true }
+)
+
+function emitSave() {
+  if (props.disabled) return
+  emit('save', {
+    regions: textToList(form.regions),
+    demand_keywords: textToList(form.demand_keywords),
+    frequency: form.frequency
+  })
+}
+
+function listToText(value: unknown) {
+  return Array.isArray(value) ? value.join(',') : ''
+}
+
+function textToList(value: string) {
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+</script>

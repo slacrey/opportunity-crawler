@@ -90,6 +90,11 @@ def create_app(database_path: str | Path) -> FastAPI:
         token, user = result
         return {"access_token": token, "token_type": "bearer", "user": user.as_dict()}
 
+    @app.get("/api/auth/me")
+    async def current_user(request: Request) -> dict[str, Any]:
+        user = _require_user(request)
+        return {"user": user.as_dict()}
+
     @app.get("/api/sources")
     async def list_sources(request: Request) -> dict[str, Any]:
         _require_user(request)
@@ -104,6 +109,121 @@ def create_app(database_path: str | Path) -> FastAPI:
                 """,
             ).fetchall()
         return {"items": [dict(row) for row in rows]}
+
+    @app.get("/api/dashboard/summary")
+    async def dashboard_summary(request: Request) -> dict[str, Any]:
+        _require_user(request)
+        with connect_sqlite(app.state.database_path) as connection:
+            source_total = int(connection.execute("SELECT COUNT(*) FROM sources").fetchone()[0])
+            healthy_sources = int(
+                connection.execute("SELECT COUNT(*) FROM sources WHERE health_status = 'healthy'").fetchone()[0]
+            )
+            failed_sources = int(
+                connection.execute("SELECT COUNT(*) FROM sources WHERE health_status = 'failed'").fetchone()[0]
+            )
+            login_required_sources = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM sources
+                    WHERE login_status NOT IN ('not_required', 'logged_in')
+                    """,
+                ).fetchone()[0]
+            )
+            pending_opportunities = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM opportunity_candidates WHERE review_status = 'pending'",
+                ).fetchone()[0]
+            )
+            accepted_opportunities = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM opportunity_candidates WHERE review_status = 'accepted'",
+                ).fetchone()[0]
+            )
+            high_score_opportunities = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM opportunity_candidates WHERE score >= 70",
+                ).fetchone()[0]
+            )
+            failed_runs = int(
+                connection.execute("SELECT COUNT(*) FROM collection_runs WHERE status = 'failed'").fetchone()[0]
+            )
+            running_runs = int(
+                connection.execute("SELECT COUNT(*) FROM collection_runs WHERE status = 'running'").fetchone()[0]
+            )
+            online_agents = int(
+                connection.execute("SELECT COUNT(*) FROM agent_instances WHERE status = 'online'").fetchone()[0]
+            )
+        return {
+            "sources": {
+                "total": source_total,
+                "healthy": healthy_sources,
+                "failed": failed_sources,
+                "login_required": login_required_sources,
+            },
+            "opportunities": {
+                "pending": pending_opportunities,
+                "accepted": accepted_opportunities,
+                "high_score": high_score_opportunities,
+            },
+            "runs": {"running": running_runs, "failed": failed_runs},
+            "agents": {"online": online_agents},
+        }
+
+    @app.get("/api/sources/{source_id}")
+    async def source_detail(source_id: int, request: Request) -> dict[str, Any]:
+        _require_user(request)
+        with connect_sqlite(app.state.database_path) as connection:
+            source = connection.execute(
+                """
+                SELECT id, name, category, home_url, priority, enabled, adapter_mode,
+                       login_mode, login_status, health_status, active_rule_version_id,
+                       maintenance_owner, last_success_at, last_failure_at, last_failure_reason,
+                       created_at, updated_at
+                FROM sources
+                WHERE id = ?
+                """,
+                (source_id,),
+            ).fetchone()
+            if source is None:
+                raise ApiError("not_found", "Source not found", status_code=404)
+            basic_rules = connection.execute(
+                "SELECT * FROM source_basic_rules WHERE source_id = ?",
+                (source_id,),
+            ).fetchone()
+            active_rule = connection.execute(
+                """
+                SELECT *
+                FROM source_advanced_rule_versions
+                WHERE source_id = ? AND status = 'active'
+                ORDER BY version DESC
+                LIMIT 1
+                """,
+                (source_id,),
+            ).fetchone()
+        return {
+            "source": dict(source),
+            "basic_rules": _source_basic_rules_payload(basic_rules),
+            "active_rule": _advanced_rule_payload(active_rule) if active_rule is not None else None,
+        }
+
+    @app.get("/api/sources/{source_id}/advanced-rules")
+    async def list_advanced_rules(source_id: int, request: Request) -> dict[str, Any]:
+        _require_user(request)
+        with connect_sqlite(app.state.database_path) as connection:
+            source = connection.execute("SELECT id FROM sources WHERE id = ?", (source_id,)).fetchone()
+            if source is None:
+                raise ApiError("not_found", "Source not found", status_code=404)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM source_advanced_rule_versions
+                WHERE source_id = ?
+                ORDER BY version DESC
+                """,
+                (source_id,),
+            ).fetchall()
+        return {"items": [_advanced_rule_payload(row) for row in rows]}
 
     @app.patch("/api/sources/{source_id}/basic-rules")
     async def update_basic_rules(source_id: int, payload: BasicRuleUpdate, request: Request) -> dict[str, Any]:
@@ -259,6 +379,80 @@ def create_app(database_path: str | Path) -> FastAPI:
             connection.commit()
         return row
 
+    @app.get("/api/opportunities")
+    async def list_opportunities(
+        request: Request,
+        review_status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        _require_user(request)
+        normalized_limit = max(1, min(limit, 200))
+        normalized_offset = max(0, offset)
+        filters: list[str] = []
+        params: list[Any] = []
+        if review_status:
+            filters.append("oc.review_status = ?")
+            params.append(review_status)
+        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+        with connect_sqlite(app.state.database_path) as connection:
+            rows = connection.execute(
+                f"""
+                SELECT oc.*, s.name AS source_name, s.priority AS source_priority
+                FROM opportunity_candidates oc
+                JOIN sources s ON s.id = oc.source_id
+                {where_clause}
+                ORDER BY oc.score DESC, oc.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*params, normalized_limit, normalized_offset),
+            ).fetchall()
+            total = int(
+                connection.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM opportunity_candidates oc
+                    {where_clause}
+                    """,
+                    params,
+                ).fetchone()[0]
+            )
+        return {"items": [dict(row) for row in rows], "total": total, "limit": normalized_limit, "offset": normalized_offset}
+
+    @app.get("/api/opportunities/{candidate_id}")
+    async def opportunity_detail(candidate_id: int, request: Request) -> dict[str, Any]:
+        _require_user(request)
+        with connect_sqlite(app.state.database_path) as connection:
+            candidate = connection.execute(
+                "SELECT * FROM opportunity_candidates WHERE id = ?",
+                (candidate_id,),
+            ).fetchone()
+            if candidate is None:
+                raise ApiError("not_found", "Opportunity candidate not found", status_code=404)
+            source = connection.execute(
+                """
+                SELECT id, name, category, home_url, priority, adapter_mode, login_mode,
+                       login_status, health_status
+                FROM sources
+                WHERE id = ?
+                """,
+                (candidate["source_id"],),
+            ).fetchone()
+            evidence = connection.execute(
+                "SELECT * FROM raw_evidence_items WHERE id = ?",
+                (candidate["evidence_id"],),
+            ).fetchone()
+            analysis = connection.execute(
+                "SELECT * FROM candidate_analysis WHERE candidate_id = ?",
+                (candidate_id,),
+            ).fetchone()
+        return {
+            "candidate": dict(candidate),
+            "source": dict(source) if source is not None else None,
+            "evidence": _evidence_payload(evidence) if evidence is not None else None,
+            "analysis": _analysis_payload(analysis) if analysis is not None else None,
+        }
+
     @app.post("/api/opportunities/{candidate_id}/review")
     async def review_candidate(candidate_id: int, payload: ReviewRequest, request: Request) -> dict[str, Any]:
         user = _require_permission(request, "opportunities:review")
@@ -313,15 +507,125 @@ def create_app(database_path: str | Path) -> FastAPI:
         _require_permission(request, "opportunities:review")
         return CustomerService(app.state.database_path).history_for_customer(customer_name)
 
+    @app.get("/api/customers")
+    async def list_customers(request: Request, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        _require_user(request)
+        normalized_limit = max(1, min(limit, 200))
+        normalized_offset = max(0, offset)
+        with connect_sqlite(app.state.database_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT c.*,
+                       COUNT(DISTINCT oc.id) AS opportunity_count,
+                       MAX(ca.occurred_at) AS last_activity_at
+                FROM customers c
+                LEFT JOIN opportunity_candidates oc ON oc.organization_name = c.name
+                LEFT JOIN customer_activities ca ON ca.customer_id = c.id
+                GROUP BY c.id
+                ORDER BY c.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (normalized_limit, normalized_offset),
+            ).fetchall()
+            total = int(connection.execute("SELECT COUNT(*) FROM customers").fetchone()[0])
+        return {"items": [dict(row) for row in rows], "total": total, "limit": normalized_limit, "offset": normalized_offset}
+
     @app.get("/api/goals/weekly-progress")
     async def weekly_progress(week_start: str, request: Request) -> dict[str, Any]:
         _require_permission(request, "goals:read")
         return GoalService(app.state.database_path).weekly_progress(week_start=week_start)
 
+    @app.get("/api/collection-runs")
+    async def list_collection_runs(request: Request, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        _require_user(request)
+        normalized_limit = max(1, min(limit, 200))
+        normalized_offset = max(0, offset)
+        with connect_sqlite(app.state.database_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT cr.*, s.name AS source_name
+                FROM collection_runs cr
+                JOIN sources s ON s.id = cr.source_id
+                ORDER BY COALESCE(cr.started_at, cr.scheduled_at, cr.finished_at, cr.run_id) DESC
+                LIMIT ? OFFSET ?
+                """,
+                (normalized_limit, normalized_offset),
+            ).fetchall()
+            total = int(connection.execute("SELECT COUNT(*) FROM collection_runs").fetchone()[0])
+        return {
+            "items": [_collection_run_payload(row) for row in rows],
+            "total": total,
+            "limit": normalized_limit,
+            "offset": normalized_offset,
+        }
+
+    @app.get("/api/agents")
+    async def list_agents(request: Request) -> dict[str, Any]:
+        _require_user(request)
+        with connect_sqlite(app.state.database_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT ai.agent_id, ai.host_id, ah.hostname, ah.platform, ah.app_version,
+                       ai.status, ai.capacity, ai.active_sessions, ai.last_heartbeat_at,
+                       ah.last_seen_at
+                FROM agent_instances ai
+                LEFT JOIN agent_hosts ah ON ah.host_id = ai.host_id
+                ORDER BY ai.agent_id
+                """,
+            ).fetchall()
+        return {"items": [dict(row) for row in rows]}
+
     @app.post("/api/notifications/dingtalk/digest")
     async def send_dingtalk_digest(payload: DigestRequest, request: Request) -> dict[str, Any]:
         _require_permission(request, "notifications:read")
         return NotificationWorker(app.state.database_path).send_daily_digest(simulate_failure=payload.simulate_failure)
+
+    @app.get("/api/notifications/logs")
+    async def list_notification_logs(request: Request, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        _require_user(request)
+        normalized_limit = max(1, min(limit, 200))
+        normalized_offset = max(0, offset)
+        with connect_sqlite(app.state.database_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM notification_logs
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (normalized_limit, normalized_offset),
+            ).fetchall()
+            total = int(connection.execute("SELECT COUNT(*) FROM notification_logs").fetchone()[0])
+        return {
+            "items": [_notification_log_payload(row) for row in rows],
+            "total": total,
+            "limit": normalized_limit,
+            "offset": normalized_offset,
+        }
+
+    @app.get("/api/audit-logs")
+    async def list_audit_logs(request: Request, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        _require_user(request)
+        normalized_limit = max(1, min(limit, 200))
+        normalized_offset = max(0, offset)
+        with connect_sqlite(app.state.database_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT al.*, u.username AS actor_username
+                FROM audit_logs al
+                LEFT JOIN users u ON u.id = al.actor_id
+                ORDER BY al.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (normalized_limit, normalized_offset),
+            ).fetchall()
+            total = int(connection.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0])
+        return {
+            "items": [_audit_log_payload(row) for row in rows],
+            "total": total,
+            "limit": normalized_limit,
+            "offset": normalized_offset,
+        }
 
     @app.websocket("/api/agents/ws")
     async def agent_websocket(websocket: WebSocket) -> None:
@@ -458,6 +762,81 @@ def _write_audit(
         """,
         (actor_id, action, resource_type, resource_id, _json(mask_audit_payload(after))),
     )
+
+
+def _source_basic_rules_payload(row: Any | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    payload = dict(row)
+    for field in ("regions_json", "industry_keywords_json", "demand_keywords_json", "exclude_keywords_json"):
+        output_field = field.removesuffix("_json")
+        payload[output_field] = _read_json(payload.pop(field), [])
+    payload["digest_enabled"] = bool(payload["digest_enabled"])
+    return payload
+
+
+def _advanced_rule_payload(row: Any) -> dict[str, Any]:
+    payload = dict(row)
+    for field in (
+        "selectors_json",
+        "pagination_policy_json",
+        "normalization_mapping_json",
+        "attachment_policy_json",
+        "risk_patterns_json",
+        "rate_limit_policy_json",
+        "retry_policy_json",
+    ):
+        output_field = field.removesuffix("_json")
+        payload[output_field] = _read_json(payload.pop(field), {})
+    payload["trial_run_snapshot"] = _read_json(payload.pop("trial_run_snapshot_json"), None)
+    return payload
+
+
+def _evidence_payload(row: Any) -> dict[str, Any]:
+    payload = dict(row)
+    payload["attachments"] = _read_json(payload.pop("attachments_json"), [])
+    return payload
+
+
+def _analysis_payload(row: Any) -> dict[str, Any]:
+    payload = dict(row)
+    return {
+        "candidate_id": payload["candidate_id"],
+        "extracted_facts": _read_json(payload["extracted_facts_json"], {}),
+        "inferred_analysis": _read_json(payload["inferred_analysis_json"], {}),
+        "scoring_reasons": _read_json(payload["scoring_reasons_json"], {}),
+        "outreach": _read_json(payload["outreach_json"], {}),
+        "provider_metadata": _read_json(payload["provider_metadata_json"], {}),
+        "updated_at": payload["updated_at"],
+    }
+
+
+def _collection_run_payload(row: Any) -> dict[str, Any]:
+    payload = dict(row)
+    payload["diagnostic_snapshot"] = _read_json(payload.pop("diagnostic_snapshot_json"), {})
+    return payload
+
+
+def _notification_log_payload(row: Any) -> dict[str, Any]:
+    payload = dict(row)
+    payload["candidate_ids"] = _read_json(payload.pop("candidate_ids_json"), [])
+    return payload
+
+
+def _audit_log_payload(row: Any) -> dict[str, Any]:
+    payload = dict(row)
+    payload["before"] = _read_json(payload.pop("before_json"), None)
+    payload["after"] = _read_json(payload.pop("after_json"), None)
+    return payload
+
+
+def _read_json(raw_value: str | None, default: Any) -> Any:
+    if raw_value is None:
+        return default
+    try:
+        return json.loads(raw_value)
+    except json.JSONDecodeError:
+        return default
 
 
 def _json(value: object) -> str:

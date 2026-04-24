@@ -26,10 +26,12 @@ export function createApiClient(options: {
   baseUrl?: string
   tokenProvider?: () => string | null | undefined
   fetcher?: Fetcher
+  onUnauthorized?: (error: ApiError) => void
 } = {}): ApiClient {
   const baseUrl = options.baseUrl ?? import.meta.env.VITE_API_BASE_URL ?? ''
   const fetcher = options.fetcher ?? fetch
   const tokenProvider = options.tokenProvider ?? readStoredToken
+  const onUnauthorized = options.onUnauthorized ?? notifyUnauthorized
 
   async function request<T>(method: string, path: string, payload?: unknown): Promise<T> {
     const headers: Record<string, string> = { Accept: 'application/json' }
@@ -45,7 +47,9 @@ export function createApiClient(options: {
     const data = contentType.includes('application/json') ? await response.json() : await readResponseBody(response)
     if (!response.ok) {
       const error = typeof data === 'object' && data !== null && 'error' in data ? (data as any).error : {}
-      throw new ApiError(error.code ?? 'api_error', error.message ?? response.statusText, response.status, error.details)
+      const apiError = new ApiError(error.code ?? 'api_error', error.message ?? response.statusText, response.status, error.details)
+      if (response.status === 401) onUnauthorized(apiError)
+      throw apiError
     }
     return data as T
   }
@@ -72,4 +76,9 @@ async function readResponseBody(response: Response) {
   } catch {
     return text
   }
+}
+
+function notifyUnauthorized(error: ApiError) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('opportunity-crawler:auth-expired', { detail: error }))
 }

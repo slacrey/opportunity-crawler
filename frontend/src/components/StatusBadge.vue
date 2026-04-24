@@ -12,7 +12,9 @@ const props = defineProps<{
 
 const displayLabel = computed(() => props.label ?? props.status ?? 'unknown')
 const toneClass = computed(() => {
-  if (['healthy', 'connected', 'succeeded', 'accepted', 'logged_in'].includes(props.status ?? '')) return 'status-success'
+  if (['healthy', 'connected', 'online', 'succeeded', 'sent', 'accepted', 'logged_in'].includes(props.status ?? '')) {
+    return 'status-success'
+  }
   if (['pending_login', 'login_required', 'operator_intervention_required', 'running'].includes(props.status ?? '')) {
     return 'status-warning'
   }
@@ -20,4 +22,3 @@ const toneClass = computed(() => {
   return 'status-neutral'
 })
 </script>
-

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 import asyncio
@@ -28,6 +29,16 @@ class FakeRunner:
             "diagnostic_snapshot": {"empty": True},
         }
 
+    async def open_source_session(self, command):
+        return {
+            "event_kind": CollectionEventKind.PAGE_OPENED,
+            "command_id": command.command_id,
+            "run_id": command.run_id,
+            "source_id": command.source_id,
+            "adapter_mode": command.adapter_mode,
+            "diagnostic_snapshot": {"source_account_id": command.source_account_id},
+        }
+
 
 class FakeClient:
     def __init__(self) -> None:
@@ -39,6 +50,22 @@ class FakeClient:
 
 def test_agent_app_handles_start_collection_run_command() -> None:
     asyncio.run(_assert_agent_app_handles_start_collection_run_command())
+
+
+def test_agent_app_handles_open_source_session_command() -> None:
+    asyncio.run(_assert_agent_app_handles_open_source_session_command())
+
+
+def test_agent_app_logs_collection_command_lifecycle(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="opportunity_crawler.agent.app")
+
+    asyncio.run(_assert_agent_app_handles_start_collection_run_command())
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("agent.command.received" in message and "command_id=cmd-1" in message for message in messages)
+    assert any("agent.event.sending" in message and "event_kind=run_started" in message for message in messages)
+    assert any("agent.command.handled" in message and "event_kind=run_succeeded" in message for message in messages)
+    assert any("agent.event.sending" in message and "event_kind=run_succeeded" in message for message in messages)
 
 
 async def _assert_agent_app_handles_start_collection_run_command() -> None:
@@ -62,3 +89,32 @@ async def _assert_agent_app_handles_start_collection_run_command() -> None:
     assert client.events[0]["run_id"] == "run-1"
     assert client.events[1]["event_kind"] is CollectionEventKind.RUN_SUCCEEDED
     assert client.events[1]["run_id"] == "run-1"
+
+
+async def _assert_agent_app_handles_open_source_session_command() -> None:
+    client = FakeClient()
+    app = CollectionAgentApp(runner=FakeRunner(), client=client)
+
+    await app.handle_command(
+        {
+            "message_type": "collection_command",
+            "command": "open_source_session",
+            "command_id": "cmd-open",
+            "run_id": None,
+            "source_id": 10,
+            "adapter_mode": "login_search_list_detail",
+            "login_mode": "login_required",
+            "source_account_id": 7,
+        }
+    )
+
+    assert client.events == [
+        {
+            "event_kind": CollectionEventKind.PAGE_OPENED,
+            "command_id": "cmd-open",
+            "run_id": None,
+            "source_id": 10,
+            "adapter_mode": "login_search_list_detail",
+            "diagnostic_snapshot": {"source_account_id": 7},
+        }
+    ]

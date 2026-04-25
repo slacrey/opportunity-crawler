@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
+
 from opportunity_crawler.collection.adapters.base import BaseAdapter, CollectionResult
 from opportunity_crawler.collection.parsing import extract_text_by_selector, parse_list_items
 from opportunity_crawler.shared.contracts.agent_protocol import CollectionCommandMessage
@@ -22,8 +25,33 @@ class PublicSearchListDetailAdapter(BaseAdapter):
         max_items = _positive_int(pagination_policy.get("max_items"))
         browser_runtime = context.get("browser_runtime")
 
-        list_html = _fetch_html(browser_runtime, entry_url)
-        list_rows = parse_list_items(list_html, selectors=selectors, base_url=entry_url)
+        query_strings = _query_strings(rule_payload.get("query_profile"))
+        list_rows: list[dict[str, object]] = []
+        seen_urls: set[str] = set()
+        total_list_item_count = 0
+        list_page_count = 0
+        for query, list_html in _iter_list_pages(
+            browser_runtime,
+            entry_url=entry_url,
+            queries=query_strings,
+            selectors=selectors,
+            rule_payload=rule_payload,
+        ):
+            list_page_count += 1
+            parsed_rows = parse_list_items(list_html, selectors=selectors, base_url=entry_url)
+            total_list_item_count += len(parsed_rows)
+            for row in parsed_rows:
+                url = str(row.get("url") or "")
+                if url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                if query is not None:
+                    row["query_keywords"] = query
+                list_rows.append(row)
+                if max_items is not None and len(list_rows) >= max_items:
+                    break
+            if max_items is not None and len(list_rows) >= max_items:
+                break
         selected_rows = list_rows[:max_items] if max_items is not None else list_rows
         rows: list[dict[str, object]] = []
         item_failures: list[dict[str, object]] = []
@@ -44,22 +72,24 @@ class PublicSearchListDetailAdapter(BaseAdapter):
 
         if not list_rows:
             stop_reason = "empty_result"
-        elif max_items is not None and len(list_rows) > max_items:
+        elif max_items is not None and total_list_item_count > max_items:
             stop_reason = "max_items_reached"
         else:
             stop_reason = "completed"
         return CollectionResult(
             rows=rows,
             item_failures=item_failures,
-            page_count=1,
+            page_count=max(1, list_page_count),
             diagnostic_snapshot={
                 "adapter_mode": self.mode,
                 "entry_url": entry_url,
-                "list_item_count": len(list_rows),
+                "list_item_count": total_list_item_count,
                 "collected_item_count": len(rows),
                 "item_failure_count": len(item_failures),
                 "pagination_stop_reason": stop_reason,
                 "browser_runtime_present": browser_runtime is not None,
+                "query_count": len(query_strings),
+                "submitted_queries": query_strings,
             },
         )
 
@@ -105,6 +135,66 @@ def _fetch_html(browser_runtime: object, url: str) -> str:
         return str(open_url(url))
 
     raise RuntimeError("browser runtime does not support fetch_html or open_url")
+
+
+def _iter_list_pages(
+    browser_runtime: object,
+    *,
+    entry_url: str,
+    queries: list[str],
+    selectors: dict[str, object],
+    rule_payload: dict[str, object],
+) -> Iterator[tuple[str | None, str]]:
+    if not queries:
+        yield None, _fetch_html(browser_runtime, entry_url)
+        return
+
+    for query in queries:
+        yield (
+            query,
+            _submit_search(browser_runtime, entry_url=entry_url, query=query, selectors=selectors, rule_payload=rule_payload),
+        )
+
+
+def _submit_search(
+    browser_runtime: object,
+    *,
+    entry_url: str,
+    query: str,
+    selectors: dict[str, object],
+    rule_payload: dict[str, object],
+) -> str:
+    submit_search = getattr(browser_runtime, "submit_search", None)
+    if callable(submit_search):
+        return str(submit_search(entry_url, query, selectors=selectors, rule_payload=rule_payload))
+    return _fetch_html(browser_runtime, _search_url(entry_url, query, selectors=selectors, rule_payload=rule_payload))
+
+
+def _search_url(
+    entry_url: str,
+    query: str,
+    *,
+    selectors: dict[str, object],
+    rule_payload: dict[str, object],
+) -> str:
+    query_param = str(
+        rule_payload.get("search_query_param")
+        or selectors.get("search_query_param")
+        or _dict(rule_payload.get("search_policy")).get("query_param")
+        or "q"
+    )
+    parts = urlsplit(entry_url)
+    params = dict(parse_qsl(parts.query, keep_blank_values=True))
+    params[query_param] = query
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), parts.fragment))
+
+
+def _query_strings(value: object) -> list[str]:
+    profile = _dict(value)
+    queries = profile.get("queries")
+    if not isinstance(queries, list):
+        return []
+    return [str(query).strip() for query in queries if str(query).strip()]
 
 
 def _dict(value: object) -> dict[str, object]:

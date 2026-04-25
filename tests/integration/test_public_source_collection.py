@@ -91,6 +91,58 @@ def test_public_source_adapter_collects_entry_and_details_from_browser_runtime()
     assert result.diagnostic_snapshot["pagination_stop_reason"] == "max_items_reached"
 
 
+def test_public_source_adapter_submits_query_profile_searches_before_collecting_details() -> None:
+    command = CollectionCommandMessage(
+        message_type="collection_command",
+        command="start_collection_run",
+        command_id="cmd-search",
+        run_id="run-search",
+        source_id=1,
+        rule_version=1,
+        adapter_mode="public_search_list_detail",
+        login_mode="not_required",
+        rule_payload={
+            "entry_url": "https://example.test/search",
+            "selectors": {
+                "search_input_selector": "#keyword",
+                "search_button_selector": "#submit",
+                "list_selector": ".result",
+                "detail_link_selector": "a",
+                "content_selector": ".content",
+            },
+            "query_profile": {"queries": ["昆山 AI", "太仓 云平台"], "exclude_keywords": [], "days_back": 7},
+            "pagination_policy": {"max_items": 2},
+        },
+    )
+    browser_runtime = FakeSearchBrowserRuntime(
+        search_pages={
+            ("https://example.test/search", "昆山 AI"): """
+                <div class="result"><a href="/detail/1">昆山 AI 项目</a></div>
+            """,
+            ("https://example.test/search", "太仓 云平台"): """
+                <div class="result"><a href="/detail/2">太仓云平台</a></div>
+            """,
+        },
+        detail_pages={
+            "https://example.test/detail/1": "<article class='content'>昆山 智慧城市 AI</article>",
+            "https://example.test/detail/2": "<article class='content'>太仓 云平台 数字化</article>",
+        },
+    )
+
+    result = PublicSearchListDetailAdapter().collect({"command": command, "browser_runtime": browser_runtime})
+
+    assert browser_runtime.submitted_searches == [
+        ("https://example.test/search", "昆山 AI"),
+        ("https://example.test/search", "太仓 云平台"),
+    ]
+    assert browser_runtime.opened_urls == ["https://example.test/detail/1", "https://example.test/detail/2"]
+    assert result.item_count == 2
+    assert result.rows[0]["query_keywords"] == "昆山 AI"
+    assert result.rows[1]["raw_text"] == "太仓 云平台 数字化"
+    assert result.diagnostic_snapshot["query_count"] == 2
+    assert result.diagnostic_snapshot["submitted_queries"] == ["昆山 AI", "太仓 云平台"]
+
+
 def test_public_source_adapter_reports_empty_result_stop_reason() -> None:
     command = CollectionCommandMessage(
         message_type="collection_command",
@@ -302,3 +354,25 @@ class FakeBrowserRuntime:
     def fetch_html(self, url: str) -> str:
         self.opened_urls.append(url)
         return self.pages[url]
+
+
+class FakeSearchBrowserRuntime:
+    def __init__(
+        self,
+        *,
+        search_pages: dict[tuple[str, str], str],
+        detail_pages: dict[str, str],
+    ) -> None:
+        self.search_pages = search_pages
+        self.detail_pages = detail_pages
+        self.submitted_searches: list[tuple[str, str]] = []
+        self.opened_urls: list[str] = []
+
+    def submit_search(self, entry_url: str, query: str, **kwargs: object) -> str:
+        _ = kwargs
+        self.submitted_searches.append((entry_url, query))
+        return self.search_pages[(entry_url, query)]
+
+    def fetch_html(self, url: str) -> str:
+        self.opened_urls.append(url)
+        return self.detail_pages[url]

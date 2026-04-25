@@ -15,9 +15,12 @@ class CommandHandlers:
             return await self.runner.start_collection_run(command)
         if command.command is ControlPlaneCommandKind.STOP_COLLECTION_RUN:
             return await self.runner.stop_collection_run(command)
+        if command.command is ControlPlaneCommandKind.OPEN_SOURCE_SESSION:
+            return await self.runner.open_source_session(command)
+        if command.command is ControlPlaneCommandKind.RELEASE_SOURCE_SESSION:
+            return await self.runner.release_source_session(command)
         if command.command is ControlPlaneCommandKind.TRIAL_RUN_ADVANCED_RULE:
             return await self.runner.trial_run_advanced_rule(command)
         if command.command is ControlPlaneCommandKind.HEALTH_CHECK:
             return await self.runner.health_check(command)
         raise NotImplementedError(f"unsupported command: {command.command}")
-

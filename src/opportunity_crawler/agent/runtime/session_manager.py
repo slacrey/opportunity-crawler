@@ -9,6 +9,7 @@ class SourceSessionOpenRequest:
     source_account_id: int
     source_id: int
     command_id: str
+    initial_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,4 +71,3 @@ def _session_id(session: Any) -> str:
     if isinstance(value, str):
         return value
     raise TypeError("session object does not expose a string session_id")
-

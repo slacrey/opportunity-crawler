@@ -127,6 +127,16 @@ def test_agent_dev_runner_consumes_collection_command_and_sends_events() -> None
     asyncio.run(_assert_agent_dev_runner_consumes_collection_command_and_sends_events(module))
 
 
+def test_agent_dev_runner_reconnects_after_service_restart(tmp_path: Path) -> None:
+    module = _load_script_module(ROOT / "scripts" / "run_agent_dev.py")
+    asyncio.run(_assert_agent_dev_runner_reconnects_after_service_restart(module, tmp_path))
+
+
+def test_agent_dev_runner_wires_browser_runtime_into_source_session_manager(tmp_path: Path) -> None:
+    module = _load_script_module(ROOT / "scripts" / "run_agent_dev.py")
+    asyncio.run(_assert_agent_dev_runner_wires_browser_runtime_into_source_session_manager(module, tmp_path))
+
+
 async def _assert_agent_dev_runner_consumes_collection_command_and_sends_events(module) -> None:
     websocket = FakeAgentWebSocket(
         [
@@ -157,6 +167,115 @@ async def _assert_agent_dev_runner_consumes_collection_command_and_sends_events(
     assert websocket.sent[1]["diagnostic_snapshot"] == {"from_runner": True}
 
 
+async def _assert_agent_dev_runner_reconnects_after_service_restart(module, tmp_path: Path) -> None:
+    config_path = tmp_path / "agent.toml"
+    config_path.write_text(
+        """
+[shared]
+browser_profiles_dir = "{browser_profiles_dir}"
+
+[agent]
+agent_id = "agent-dev"
+host_id = "host-dev"
+capacity = 1
+max_concurrency = 1
+control_plane_base_url = "http://127.0.0.1:8000"
+""".format(browser_profiles_dir=tmp_path / "browser-profiles"),
+        encoding="utf-8",
+    )
+    sockets = [
+        FakeAgentWebSocket(
+            [
+                {"type": "registered", "agent_id": "agent-dev"},
+            ],
+            close_after_register=True,
+        ),
+        FakeAgentWebSocket(
+            [
+                {"type": "registered", "agent_id": "agent-dev"},
+            ],
+            close_after_register=True,
+        ),
+    ]
+    connect_attempts = 0
+
+    def connect_factory(*args, **kwargs):
+        nonlocal connect_attempts
+        _ = args, kwargs
+        websocket = sockets[connect_attempts]
+        connect_attempts += 1
+        return FakeConnectContext(websocket)
+
+    module.wait_for_control_plane = lambda base_url, timeout_seconds: None
+    module.CamoufoxRuntime = lambda browser_profiles_dir: object()
+    module.CollectionRunner = lambda browser_runtime, session_manager: FakeRunner()
+
+    await module.run_agent(
+        config_path,
+        heartbeat_interval=60,
+        startup_timeout=1,
+        once=False,
+        connect_factory=connect_factory,
+        reconnect_delay=0,
+        max_reconnects=1,
+    )
+
+    assert connect_attempts == 2
+    assert sockets[0].sent[0]["type"] == "register"
+    assert sockets[1].sent[0]["type"] == "register"
+
+
+async def _assert_agent_dev_runner_wires_browser_runtime_into_source_session_manager(module, tmp_path: Path) -> None:
+    captured = {}
+
+    class FakeRuntime:
+        pass
+
+    class FakeSettings:
+        class agent:
+            agent_id = "agent-dev"
+            host_id = "host-dev"
+            capacity = 1
+
+        class shared:
+            browser_profiles_dir = tmp_path / "browser-profiles"
+
+    def runtime_factory(browser_profiles_dir):
+        runtime = FakeRuntime()
+        captured["browser_profiles_dir"] = browser_profiles_dir
+        captured["browser_runtime"] = runtime
+        return runtime
+
+    def collection_runner_factory(*, browser_runtime, session_manager):
+        captured["runner_browser_runtime"] = browser_runtime
+        captured["session_manager"] = session_manager
+        return FakeRunner()
+
+    module.CamoufoxRuntime = runtime_factory
+    module.CollectionRunner = collection_runner_factory
+    websocket = FakeAgentWebSocket(
+        [
+            {"type": "registered", "agent_id": "agent-dev"},
+        ],
+        close_after_register=True,
+    )
+
+    try:
+        await module.run_agent_connection(
+            connect_factory=lambda *args, **kwargs: FakeConnectContext(websocket),
+            ws_url="ws://127.0.0.1:8000/api/agents/ws",
+            settings=FakeSettings(),
+            heartbeat_interval=60,
+            once=False,
+        )
+    except FakeServiceRestart:
+        pass
+
+    assert captured["browser_profiles_dir"] == tmp_path / "browser-profiles"
+    assert captured["runner_browser_runtime"] is captured["browser_runtime"]
+    assert captured["session_manager"].runtime is captured["browser_runtime"]
+
+
 def test_vite_dev_server_proxies_api_to_control_plane() -> None:
     content = (ROOT / "frontend" / "vite.config.ts").read_text(encoding="utf-8")
 
@@ -169,6 +288,7 @@ def test_vite_dev_server_proxies_api_to_control_plane() -> None:
 def test_python_project_declares_dev_startup_runtime_dependencies() -> None:
     content = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
+    assert "camoufox" in content
     assert "fastapi" in content
     assert "uvicorn" in content
     assert "websockets" in content
@@ -216,15 +336,35 @@ def _load_script_module(path: Path):
 
 
 class FakeAgentWebSocket:
-    def __init__(self, received: list[dict[str, object]]) -> None:
+    def __init__(self, received: list[dict[str, object]], *, close_after_register: bool = False) -> None:
         self.received = [json.dumps(message) for message in received]
+        self.close_after_register = close_after_register
+        self.recv_count = 0
         self.sent: list[dict[str, object]] = []
 
     async def send(self, payload: str) -> None:
         self.sent.append(json.loads(payload))
 
     async def recv(self) -> str:
+        self.recv_count += 1
+        if self.close_after_register and self.recv_count > 1:
+            raise FakeServiceRestart("received 1012 (service restart); then sent 1012 (service restart)")
         return self.received.pop(0)
+
+
+class FakeConnectContext:
+    def __init__(self, websocket: FakeAgentWebSocket) -> None:
+        self.websocket = websocket
+
+    async def __aenter__(self) -> FakeAgentWebSocket:
+        return self.websocket
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        return None
+
+
+class FakeServiceRestart(Exception):
+    pass
 
 
 class FakeRunner:

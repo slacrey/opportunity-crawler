@@ -9,6 +9,7 @@ import sqlite3
 import uuid
 
 from opportunity_crawler.collection.evidence import build_evidence_payload
+from opportunity_crawler.collection.query_profiles import build_query_profile
 from opportunity_crawler.shared.contracts.agent_protocol import (
     CollectionCommandMessage,
     CollectionEventKind,
@@ -38,10 +39,19 @@ class CollectionRunService:
                        arv.attachment_policy_json,
                        arv.risk_patterns_json,
                        arv.rate_limit_policy_json,
-                       arv.retry_policy_json
+                       arv.retry_policy_json,
+                       br.regions_json AS basic_regions_json,
+                       br.industry_keywords_json AS basic_industry_keywords_json,
+                       br.demand_keywords_json AS basic_demand_keywords_json,
+                       br.exclude_keywords_json AS basic_exclude_keywords_json,
+                       br.frequency AS basic_frequency,
+                       br.digest_enabled AS basic_digest_enabled,
+                       br.digest_score_threshold AS basic_digest_score_threshold
                 FROM sources s
                 LEFT JOIN source_advanced_rule_versions arv
                     ON arv.id = s.active_rule_version_id
+                LEFT JOIN source_basic_rules br
+                    ON br.source_id = s.id
                 WHERE s.id = ?
                 """,
                 (source_id,),
@@ -169,6 +179,8 @@ def collection_run_payload(row: Any) -> dict[str, Any]:
 
 
 def _rule_payload(row: Any) -> dict[str, Any]:
+    basic_rules = _basic_rule_payload(row)
+    query_profile = build_query_profile(basic_rules, days_back=_days_back_for_frequency(basic_rules.get("frequency")))
     return {
         "entry_url": row["entry_url"],
         "selectors": _read_json(row["selectors_json"], {}),
@@ -178,7 +190,33 @@ def _rule_payload(row: Any) -> dict[str, Any]:
         "risk_patterns": _read_json(row["risk_patterns_json"], {}),
         "rate_limit_policy": _read_json(row["rate_limit_policy_json"], {}),
         "retry_policy": _read_json(row["retry_policy_json"], {}),
+        "basic_rules": basic_rules,
+        "query_profile": {
+            "queries": query_profile.queries,
+            "exclude_keywords": query_profile.exclude_keywords,
+            "days_back": query_profile.days_back,
+        },
     }
+
+
+def _basic_rule_payload(row: Any) -> dict[str, Any]:
+    return {
+        "regions": _read_json(row["basic_regions_json"], []),
+        "industry_keywords": _read_json(row["basic_industry_keywords_json"], []),
+        "demand_keywords": _read_json(row["basic_demand_keywords_json"], []),
+        "exclude_keywords": _read_json(row["basic_exclude_keywords_json"], []),
+        "frequency": row["basic_frequency"] or "manual",
+        "digest_enabled": bool(row["basic_digest_enabled"] or 0),
+        "digest_score_threshold": int(row["basic_digest_score_threshold"] or 0),
+    }
+
+
+def _days_back_for_frequency(frequency: Any) -> int:
+    if frequency == "daily":
+        return 1
+    if frequency == "weekly":
+        return 7
+    return 7
 
 
 def _persist_evidence_rows(connection: sqlite3.Connection, event: CollectionEventMessage) -> int:
